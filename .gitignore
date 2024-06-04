@@ -3,3 +3,4 @@ Lib
 Scripts
 pyvenv.cfg
 testVideo.mp4
+__pycache__

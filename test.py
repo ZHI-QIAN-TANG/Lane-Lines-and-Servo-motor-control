@@ -1,6 +1,7 @@
 import numpy as np # 導入NumPy庫
 import cv2 # 導入OpenCV庫
 import time # 導入時間庫
+from test2 import pointRegression
 
 out_examples = 0 # 初始化變量out_examples為0
 MOV_AVG_LENGTH = 5 # 設定移動平均的長度為5
@@ -75,6 +76,13 @@ def sliding_windown(img_w):
     nwindows = 9 # 設定滑動窗口數量
     window_height = img_w.shape[0] // nwindows # 計算每個窗口的高度
     nonzero = img_w.nonzero() # 獲取非零像素的位置
+    
+    points = []
+    for i in range(len(nonzero[0])):
+        points.append((nonzero[0][i], nonzero[1][i]))
+        
+    slope = pointRegression(np.array(points), img_w.shape[0])
+    print(slope)
     nonzeroy = np.array(nonzero[0]) # 非零像素的y坐標
     nonzerox = np.array(nonzero[1]) # 非零像素的x坐標
     leftx_current = leftx_base # 左車道線當前x坐標
