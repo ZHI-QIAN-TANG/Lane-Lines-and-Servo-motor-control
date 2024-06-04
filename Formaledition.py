@@ -1,6 +1,7 @@
 import numpy as np # 導入NumPy庫
 import cv2 # 導入OpenCV庫
 import time # 導入時間庫
+from scipy.stats import linregress
 
 out_examples = 0 # 初始化變量out_examples為0
 MOV_AVG_LENGTH = 5 # 設定移動平均的長度為5
@@ -72,12 +73,12 @@ def sliding_windown(img_w):
     leftx_base = np.argmax(histogram[:midpoint]) # 找到左車道線的基點
     rightx_base = np.argmax(histogram[midpoint:]) + midpoint # 找到右車道線的基點
 
-    nwindows = 9 # 設定滑動窗口數量
+    nwindows = 15 # 設定滑動窗口數量
     window_height = img_w.shape[0] // nwindows # 計算每個窗口的高度
     nonzero = img_w.nonzero() # 獲取非零像素的位置
     nonzeroy = np.array(nonzero[0]) # 非零像素的y坐標
     nonzerox = np.array(nonzero[1]) # 非零像素的x坐標
-    leftx_current = leftx_base # 左車道線當前x坐標
+    leftx_current = leftx_base + 100 # 左車道線當前x坐標
     rightx_current = rightx_base # 右車道線當前x坐標
     margin = 100 # 設定窗口的寬度
     minpix = 50 # 設定最小像素數
@@ -124,7 +125,7 @@ def fit_from_lines(left_fit, right_fit, img_w):
     nonzero = img_w.nonzero() # 獲取非零像素的位置
     nonzeroy = np.array(nonzero[0]) # 非零像素的y坐標
     nonzerox = np.array(nonzero[1]) # 非零像素的x坐標
-    margin = 100 # 設定窗口的寬度
+    margin = 200 # 設定窗口的寬度
     left_lane_inds = ((nonzerox > (left_fit[0] * (nonzeroy ** 2) + left_fit[1] * nonzeroy + left_fit[2] - margin)) & (nonzerox < (left_fit[0] * (nonzeroy ** 2) + left_fit[1] * nonzeroy + left_fit[2] + margin))) # 找到左車道線像素
     right_lane_inds = ((nonzerox > (right_fit[0] * (nonzeroy ** 2) + right_fit[1] * nonzeroy + right_fit[2] - margin)) & (nonzerox < (right_fit[0] * (nonzeroy ** 2) + right_fit[1] * nonzeroy + right_fit[2] + margin))) # 找到右車道線像素
     leftx = nonzerox[left_lane_inds] # 獲取左車道線x坐標
@@ -164,15 +165,6 @@ def draw_lines(img, img_w, left_fit, right_fit, perspective):
     result = cv2.addWeighted(result, 1, newwarp_lines, 0.8, 0) # 合併原圖和車道線
    
     return result, newwarp_lines # 返回結果圖像和變換後的車道線圖像
-
-# 計算曲率半徑
-def curve(left, right, h):
-    ym = 10 / 720 # y方向的尺度轉換
-    xm = 4 / 1080 # x方向的尺度轉換
-    left_fit_cr = [xm / (ym ** 2) * left[0], xm / ym * left[1], left[2]] # 左車道線擬合係數轉換
-    right_fit_cr = [xm / (ym ** 2) * right[0], xm / ym * right[1], right[2]] # 右車道線擬合係數轉換
-    curve_rad = ((1 + (2 * left_fit_cr[0] * h * ym + left_fit_cr[1]) ** 2) ** (3 / 2) / np.absolute(2 * left_fit_cr[0]) + (1 + (2 * right_fit_cr[0] * h * ym + right_fit_cr[1]) ** 2) ** (3 / 2) / np.absolute(2 * right_fit_cr[0])) # 計算曲率半徑
-    return curve_rad # 返回曲率半徑
 
 cap = cv2.VideoCapture('testVideo.mp4') # 讀取視頻文件
 fps = int(cap.get(cv2.CAP_PROP_FPS)) # 獲取視頻的幀率
@@ -214,25 +206,37 @@ while True: # 開始視頻處理循環
         right_fit = [np.mean(mov_avg_right[:, 0]), np.mean(mov_avg_right[:, 1]), np.mean(mov_avg_right[:, 2])] # 計算右車道線移動平均
 
     result, warp_img = draw_lines(img, img_w, left_fit, right_fit, (src, dst)) # 繪製車道線
-    curve_radius = curve(left_fit, right_fit, img.shape[0]) # 計算曲率半徑
+    # curve_radius = curve(left_fit, right_fit, img.shape[0]) # 計算曲率半徑
 
+
+    def slope(left, right, h):
+        ym = 10 / 720 # y方向的尺度轉換
+        xm = 4 / 1080 # x方向的尺度轉換
+        left_slope = (2 * left[0] * h * ym + left[1]) / (ym * 2)  # 左車道線斜率
+        right_slope = (2 * right[0] * h * ym + right[1]) / (ym * 2)  # 右車道線斜率
+        return left_slope, right_slope # 返回左右車道線斜率
+    left_slope, right_slope = slope(left_fit, right_fit, img.shape[0])
 
     try:
-        radius = 5729.57795 / curve_radius # 計算轉彎半徑
+        if right_slope > 0:
+            right_slope += 10
+        print('left_slope ',left_slope)
+        print('right_slope ',right_slope)
     except ZeroDivisionError:
-        radius = float('inf') # 如果出現除零錯誤，設為無窮大
+        right_slope = float('inf') # 如果出現除零錯誤，設為無窮大
 
     font = cv2.FONT_HERSHEY_SIMPLEX # 設定字體
-    if radius > 0:
-        curve_direction = "Curve Left" # 如果半徑大於0，顯示向左轉
-    else:
-        curve_direction = "Curve Right" # 如果半徑小於0，顯示向右轉
+    if -10 < right_slope < 10:
+        curve_direction = "Forward" 
+    elif right_slope > 0:
+        curve_direction = "Turn Left" 
+    elif right_slope < 0:
+        curve_direction = "Turn Right" 
 
     cv2.putText(result, curve_direction, (50, 50), font, 1, (0, 255, 0), 2, cv2.LINE_AA) # 在圖像上顯示轉彎方向
     # out.write(result) # 寫入輸出視頻
 
     rows, cols = result.shape[:2] # 獲取圖像尺寸
-    M = cv2.getRotationMatrix2D((cols / 2, rows / 2), radius, 1) # 計算旋轉矩陣
     cv2.imshow('frame', result) # 顯示處理後的圖像
 
     if cv2.waitKey(1) & 0xFF == ord('q'): # 如果按下'q'鍵，退出循環
