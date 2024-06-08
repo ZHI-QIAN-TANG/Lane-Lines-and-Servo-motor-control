@@ -1,3 +1,4 @@
+#用於跑電腦模擬
 import numpy as np # 導入NumPy庫
 import cv2 # 導入OpenCV庫
 import time # 導入時間庫
@@ -11,47 +12,28 @@ MOV_AVG_LENGTH = 5 # 設定移動平均的長度為5
 # smoothed_angle = 0 # 初始化平滑角度為0
 
 # 定義顏色處理函數
-def color(inpImage): 
-    hls = cv2.cvtColor(inpImage, cv2.COLOR_BGR2HLS) # 將輸入圖像轉換為HLS色彩空間
-    lower_white = np.array([0, 160, 10]) # 設定白色的下界
-    upper_white = np.array([255, 255, 255]) # 設定白色的上界
-    mask = cv2.inRange(inpImage, lower_white, upper_white) # 對圖像進行閾值處理，提取白色部分
-    hls_result = cv2.bitwise_and(inpImage, inpImage, mask=mask) # 使用掩膜進行位元運算
-    gray = cv2.cvtColor(hls_result, cv2.COLOR_BGR2GRAY) # 將結果轉換為灰度圖像
+def ColoChange(inpImage): 
+    lowerWhite = np.array([0, 160, 10]) # 設定白色的下界
+    HighWhite = np.array([255, 255, 255]) # 設定白色的上界
+    mask = cv2.inRange(inpImage, lowerWhite, HighWhite) # 對圖像進行閾值處理，提取白色部分
+    hlsResult = cv2.bitwise_and(inpImage, inpImage, mask=mask) # 使用進行位元運算
+    gray = cv2.cvtColor(hlsResult, cv2.COLOR_BGR2GRAY) # 將結果轉換為灰度圖像
     ret, thresh = cv2.threshold(gray, 100, 200, cv2.THRESH_BINARY) # 對灰度圖像進行閾值處理
     blur = cv2.GaussianBlur(thresh, (3, 3), 11) # 對二值圖像進行高斯模糊
     canny = cv2.Canny(blur, 40, 60) # 使用Canny邊緣檢測
-    kernel = np.ones((9,9), dtype=np.uint8) 
-    dilate = cv2.dilate(canny,kernel,iterations=1)
-    cv2.imshow('re',dilate)
+    kernel = np.ones((9,9), dtype=np.uint8) #進行膨脹
+    dilate = cv2.dilate(canny,kernel,iterations=1) #進行擴張
+    cv2.imshow('re',dilate) #顯示擴張
     return dilate # 返回邊緣檢測結果
 
-# 定義Sobel邊緣檢測和二值化函數
-def sobel_binary(img, sobel_kernel=7, mag_thresh=(3, 255), s_thresh=(170, 255)):
-    hls = cv2.cvtColor(img, cv2.COLOR_RGB2HLS) # 將圖像轉換為HLS色彩空間
-    gray = hls[:, :, 1] # 提取亮度通道
-    s_channel = hls[:, :, 2] # 提取飽和度通道
-    sobel_binary = np.zeros(shape=gray.shape, dtype=bool) # 初始化Sobel二值圖像
-    s_binary = sobel_binary # 初始化S通道二值圖像
-    combined_binary = s_binary.astype(np.float32) # 初始化組合二值圖像
-    sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=sobel_kernel) # 計算Sobel X方向梯度
-    sobely = 0 # Sobel Y方向梯度設為0
-    sobel_abs = np.abs(sobelx**2 + sobely**2) # 計算Sobel梯度的絕對值
-    sobel_abs = np.uint8(255 * sobel_abs / np.max(sobel_abs)) # 將梯度值轉換為8位圖像
-    sobel_binary[(sobel_abs > mag_thresh[0]) & (sobel_abs <= mag_thresh[1])] = 1 # 進行閾值處理
-    s_binary[(s_channel >= s_thresh[0]) & (s_channel <= s_thresh[1])] = 1 # 進行閾值處理
-    combined_binary[(s_binary == 1) | (sobel_binary == 1)] = 1 # 合併二值圖像
-    combined_binary = np.uint8(255 * combined_binary / np.max(combined_binary)) # 將組合二值圖像轉換為8位圖像
-    return combined_binary # 返回組合二值圖像
-
 # 定義感興趣區域的遮罩函數
-def region_of_interest(img):
+def RegionOfInterest(img):
     mask = np.zeros_like(img) # 創建與輸入圖像相同大小的黑色遮罩
     imshape = img.shape # 獲取圖像形狀
     vertices = np.array([[(0, imshape[0]), (390, 440), (880, 440), (imshape[1]-20, imshape[0])]], dtype=np.int32) # 定義多邊形頂點
     cv2.fillPoly(mask, vertices, 255) # 填充多邊形
     masked_image = cv2.bitwise_and(img, mask) # 應用遮罩
-    cv2.imshow('a',mask)
+    cv2.imshow('masked_image',mask)
     return masked_image # 返回遮罩後的圖像
 
 # 定義透視變換函數
@@ -63,7 +45,7 @@ def warp(img, src, dst):
 prev_left_fit = []
 prev_right_fit = []
 # 定義滑動窗口法進行車道線檢測
-def sliding_windown(img_w):
+def SlidingWindown(img_w):
     global prev_left_fit
     global prev_right_fit
     
@@ -73,7 +55,7 @@ def sliding_windown(img_w):
     leftx_base = np.argmax(histogram[:midpoint]) # 找到左車道線的基點
     rightx_base = np.argmax(histogram[midpoint:]) + midpoint # 找到右車道線的基點
 
-    nwindows = 15 # 設定滑動窗口數量
+    nwindows = 20 # 設定滑動窗口數量
     window_height = img_w.shape[0] // nwindows # 計算每個窗口的高度
     nonzero = img_w.nonzero() # 獲取非零像素的位置
     nonzeroy = np.array(nonzero[0]) # 非零像素的y坐標
@@ -82,8 +64,8 @@ def sliding_windown(img_w):
     rightx_current = rightx_base # 右車道線當前x坐標
     margin = 100 # 設定窗口的寬度
     minpix = 50 # 設定最小像素數
-    left_lane_inds = [] # 儲存左車道線像素索引
-    right_lane_inds = [] # 儲存右車道線像素索引
+    leftLaneInds = [] # 儲存左車道線像素索引
+    ReftLaneInds = [] # 儲存右車道線像素索引
 
     for window in range(nwindows):
         win_y_low = img_w.shape[0] - (window + 1) * window_height # 計算窗口的y坐標下界
@@ -96,19 +78,19 @@ def sliding_windown(img_w):
         cv2.rectangle(out_img, (win_xright_low, win_y_low), (win_xright_high, win_y_high), (0, 255, 0), 2) # 繪製右窗口
         good_left_inds = ((nonzeroy >= win_y_low) & (nonzeroy < win_y_high) & (nonzerox >= win_xleft_low) & (nonzerox < win_xleft_high)).nonzero()[0] # 找到左窗口內的像素
         good_right_inds = ((nonzeroy >= win_y_low) & (nonzeroy < win_y_high) & (nonzerox >= win_xright_low) & (nonzerox < win_xright_high)).nonzero()[0] # 找到右窗口內的像素
-        left_lane_inds.append(good_left_inds) # 添加左車道線像素索引
-        right_lane_inds.append(good_right_inds) # 添加右車道線像素索引
+        leftLaneInds.append(good_left_inds) # 添加左車道線像素索引
+        ReftLaneInds.append(good_right_inds) # 添加右車道線像素索引
         if len(good_left_inds) > minpix:
             leftx_current = np.int32(np.mean(nonzerox[good_left_inds])) # 更新左車道線當前x坐標
         if len(good_right_inds) > minpix:
             rightx_current = np.int32(np.mean(nonzerox[good_right_inds])) # 更新右車道線當前x坐標
     cv2.imshow("slide", out_img)
-    left_lane_inds = np.concatenate(left_lane_inds) # 合併左車道線像素索引
-    right_lane_inds = np.concatenate(right_lane_inds) # 合併右車道線像素索引
-    leftx = nonzerox[left_lane_inds] # 獲取左車道線x坐標
-    lefty = nonzeroy[left_lane_inds] # 獲取左車道線y坐標
-    rightx = nonzerox[right_lane_inds] # 獲取右車道線x坐標
-    righty = nonzeroy[right_lane_inds] # 獲取右車道線y坐標
+    leftLaneInds = np.concatenate(leftLaneInds) # 合併左車道線像素索引
+    ReftLaneInds = np.concatenate(ReftLaneInds) # 合併右車道線像素索引
+    leftx = nonzerox[leftLaneInds] # 獲取左車道線x坐標
+    lefty = nonzeroy[leftLaneInds] # 獲取左車道線y坐標
+    rightx = nonzerox[ReftLaneInds] # 獲取右車道線x坐標
+    righty = nonzeroy[ReftLaneInds] # 獲取右車道線y坐標
     left_fit = np.polyfit(lefty, leftx, 2) if leftx.size > 0 and lefty.size > 0 else prev_left_fit # 擬合左車道線二次多項式
     right_fit = np.polyfit(righty, rightx, 2) if rightx.size > 0 and righty.size > 0 else prev_right_fit # 擬合右車道線二次多項式
 
@@ -126,12 +108,12 @@ def fit_from_lines(left_fit, right_fit, img_w):
     nonzeroy = np.array(nonzero[0]) # 非零像素的y坐標
     nonzerox = np.array(nonzero[1]) # 非零像素的x坐標
     margin = 200 # 設定窗口的寬度
-    left_lane_inds = ((nonzerox > (left_fit[0] * (nonzeroy ** 2) + left_fit[1] * nonzeroy + left_fit[2] - margin)) & (nonzerox < (left_fit[0] * (nonzeroy ** 2) + left_fit[1] * nonzeroy + left_fit[2] + margin))) # 找到左車道線像素
-    right_lane_inds = ((nonzerox > (right_fit[0] * (nonzeroy ** 2) + right_fit[1] * nonzeroy + right_fit[2] - margin)) & (nonzerox < (right_fit[0] * (nonzeroy ** 2) + right_fit[1] * nonzeroy + right_fit[2] + margin))) # 找到右車道線像素
-    leftx = nonzerox[left_lane_inds] # 獲取左車道線x坐標
-    lefty = nonzeroy[left_lane_inds] # 獲取左車道線y坐標
-    rightx = nonzerox[right_lane_inds] # 獲取右車道線x坐標
-    righty = nonzeroy[right_lane_inds] # 獲取右車道線y坐標
+    leftLaneInds = ((nonzerox > (left_fit[0] * (nonzeroy ** 2) + left_fit[1] * nonzeroy + left_fit[2] - margin)) & (nonzerox < (left_fit[0] * (nonzeroy ** 2) + left_fit[1] * nonzeroy + left_fit[2] + margin))) # 找到左車道線像素
+    ReftLaneInds = ((nonzerox > (right_fit[0] * (nonzeroy ** 2) + right_fit[1] * nonzeroy + right_fit[2] - margin)) & (nonzerox < (right_fit[0] * (nonzeroy ** 2) + right_fit[1] * nonzeroy + right_fit[2] + margin))) # 找到右車道線像素
+    leftx = nonzerox[leftLaneInds] # 獲取左車道線x坐標
+    lefty = nonzeroy[leftLaneInds] # 獲取左車道線y坐標
+    rightx = nonzerox[ReftLaneInds] # 獲取右車道線x坐標
+    righty = nonzeroy[ReftLaneInds] # 獲取右車道線y坐標
     if leftx.any() == False or lefty.any() == False:
         return left_fit, right_fit
     else:
@@ -141,7 +123,7 @@ def fit_from_lines(left_fit, right_fit, img_w):
      # 返回新的擬合結果
 
 # 繪製車道線和區域
-def draw_lines(img, img_w, left_fit, right_fit, perspective):
+def DrawLines(img, img_w, left_fit, right_fit, perspective):
     warp_zero = np.zeros_like(img_w).astype(np.uint8) # 創建黑色圖像
     color_warp = np.dstack((warp_zero, warp_zero, warp_zero)) # 創建彩色圖像
 
@@ -170,8 +152,6 @@ cap = cv2.VideoCapture('testVideo.mp4') # 讀取視頻文件
 fps = int(cap.get(cv2.CAP_PROP_FPS)) # 獲取視頻的幀率
 width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) # 獲取視頻的寬度
 height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) # 獲取視頻的高度
-fourcc = cv2.VideoWriter_fourcc(*'XVID') # 設定視頻編碼格式
-# out = cv2.VideoWriter('output.avi', fourcc, fps, (width, height)) # 創建輸出視頻文件
 
 mov_avg_left = np.empty((0, 3)) # 初始化左車道線移動平均數組
 mov_avg_right = np.empty((0, 3)) # 初始化右車道線移動平均數組
@@ -187,11 +167,11 @@ while True: # 開始視頻處理循環
     H = np.float32([src]) # 將源點轉換為浮點數型別
     W = np.float32([dst]) # 將目標點轉換為浮點數型別
     img = cv2.resize(img, (1280, 720)) # 調整圖像大小
-    result = color(img) # 進行顏色處理
-    rewslt = region_of_interest(result)
+    result = ColoChange(img) # 進行顏色處理
+    rewslt = RegionOfInterest(result)
     img_w = warp(result, src, dst) # 進行透視變換
     cv2.imshow("warp", img_w)
-    out_img = sliding_windown(img_w) # 使用滑動窗口方法
+    out_img = SlidingWindown(img_w) # 使用滑動窗口方法
     left_fit, right_fit = out_img[0], out_img[1] # 獲取車道線擬合結果
     new_outimg = fit_from_lines(left_fit, right_fit, img_w) # 再次擬合車道線
     left_fit, right_fit = new_outimg[0], new_outimg[1] # 更新車道線擬合結果
@@ -205,7 +185,7 @@ while True: # 開始視頻處理循環
         left_fit = [np.mean(mov_avg_left[:, 0]), np.mean(mov_avg_left[:, 1]), np.mean(mov_avg_left[:, 2])] # 計算左車道線移動平均
         right_fit = [np.mean(mov_avg_right[:, 0]), np.mean(mov_avg_right[:, 1]), np.mean(mov_avg_right[:, 2])] # 計算右車道線移動平均
 
-    result, warp_img = draw_lines(img, img_w, left_fit, right_fit, (src, dst)) # 繪製車道線
+    result, warp_img = DrawLines(img, img_w, left_fit, right_fit, (src, dst)) # 繪製車道線
     # curve_radius = curve(left_fit, right_fit, img.shape[0]) # 計算曲率半徑
 
 
