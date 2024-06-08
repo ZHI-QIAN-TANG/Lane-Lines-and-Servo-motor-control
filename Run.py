@@ -2,12 +2,13 @@
 import numpy as np # 導入NumPy庫
 import cv2 # 導入OpenCV庫
 import time # 導入時間庫
+import RPi.GPIO as GPIO
+
 
 out_examples = 0 # 初始化變量out_examples為0
 MOV_AVG_LENGTH = 5 # 設定移動平均的長度為5
 
-import RPi.GPIO as GPIO
-import time
+
 
 # 設定伺服馬達的引腳
 pin_servo = 25
@@ -42,19 +43,34 @@ def set_direction(angle):
     print("角度=", angle, "-> duty=", duty)
 
 # 定義顏色處理函數
-def ColoChange(inpImage): 
-    lowerWhite = np.array([0, 160, 10]) # 設定白色的下界
-    HighWhite = np.array([255, 255, 255]) # 設定白色的上界
-    mask = cv2.inRange(inpImage, lowerWhite, HighWhite) # 對圖像進行閾值處理，提取白色部分
-    hlsResult = cv2.bitwise_and(inpImage, inpImage, mask=mask) # 使用進行位元運算
-    gray = cv2.cvtColor(hlsResult, cv2.COLOR_BGR2GRAY) # 將結果轉換為灰度圖像
-    ret, thresh = cv2.threshold(gray, 100, 200, cv2.THRESH_BINARY) # 對灰度圖像進行閾值處理
-    blur = cv2.GaussianBlur(thresh, (3, 3), 11) # 對二值圖像進行高斯模糊
-    canny = cv2.Canny(blur, 40, 60) # 使用Canny邊緣檢測
-    kernel = np.ones((9,9), dtype=np.uint8) #進行膨脹
-    dilate = cv2.dilate(canny,kernel,iterations=1) #進行擴張
-    # cv2.imshow('re',dilate) #顯示擴張
-    return dilate # 返回邊緣檢測結果
+def ProcessImage(inpImage):
+    # 設定白色的下界和上界
+    lowerWhite = np.array([0, 160, 10])
+    upperWhite = np.array([255, 255, 255])
+    
+    # 對圖像進行閾值處理，提取白色部分
+    mask = cv2.inRange(inpImage, lowerWhite, upperWhite)
+    hlsResult = cv2.bitwise_and(inpImage, inpImage, mask=mask)
+    
+    # 將結果轉換為灰度圖像
+    gray = cv2.cvtColor(hlsResult, cv2.COLOR_BGR2GRAY)
+    
+    # 對灰度圖像進行自適應閾值處理
+    thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+    
+    # 對二值圖像進行高斯模糊
+    blur = cv2.GaussianBlur(thresh, (5, 5), 0)
+    
+    # 使用Canny邊緣檢測
+    canny = cv2.Canny(blur, 50, 150)
+    
+    # 進行膨脹
+    kernel = np.ones((9, 9), np.uint8)
+    dilate = cv2.dilate(canny, kernel, iterations=1)
+    
+    # 顯示擴張後的圖像（在實際使用時可以選擇移除）
+    cv2.imshow('Edges', dilate)
+    return dilate
 
 # 定義感興趣區域的遮罩函數
 def RegionOfInterest(img):
@@ -66,117 +82,184 @@ def RegionOfInterest(img):
     # cv2.imshow('a',mask)
     return masked_image # 返回遮罩後的圖像
 
-# 定義透視變換函數
-def warp(img, src, dst):
-    src = np.float32([src]) # 將源點轉換為浮點數型別
-    dst = np.float32([dst]) # 將目標點轉換為浮點數型別
-    return cv2.warpPerspective(img, cv2.getPerspectiveTransform(src, dst), dsize=img.shape[0:2][::-1], flags=cv2.INTER_LINEAR) # 進行透視變換
+def warp(img, src_points, dst_points, size=None):
+    # 檢查並轉換源點和目標點為浮點數類型
+    src = np.array(src_points, dtype=np.float32)
+    dst = np.array(dst_points, dtype=np.float32)
+    
+    # 獲取圖像尺寸
+    img_size = (img.shape[1], img.shape[0]) if size is None else size
+    
+    # 計算透視變換矩陣
+    M = cv2.getPerspectiveTransform(src, dst)
+    
+    # 進行透視變換
+    warped = cv2.warpPerspective(img, M, img_size, flags=cv2.INTER_LINEAR)
+    
+    # 創建一個黑色圖像並將透視變換後的圖像置於中央
+    centered_warped = np.zeros_like(img)
+    x_offset = (centered_warped.shape[1] - img_size[0]) // 2
+    y_offset = (centered_warped.shape[0] - img_size[1]) // 2
+    centered_warped[y_offset:y_offset+img_size[1], x_offset:x_offset+img_size[0]] = warped
+    
+    return centered_warped
 
 prev_left_fit = []
 prev_right_fit = []
 # 定義滑動窗口法進行車道線檢測
-def SlidingWindown(img_w):
+def Slidingwin(binary_warped):
     global prev_left_fit
     global prev_right_fit
+
+    # 創建一個輸出圖像來繪製和可視化結果
+    OutImg = np.dstack((binary_warped, binary_warped, binary_warped)) * 255
     
-    histogram = np.sum(img_w[int(img_w.shape[0] / 2):, :], axis=0) # 計算下半部分圖像的直方圖
-    out_img = np.dstack((img_w, img_w, img_w)) * 255 # 創建彩色輸出圖像
-    midpoint = np.int32(histogram.shape[0] / 2) # 計算直方圖中點
-    leftx_base = np.argmax(histogram[:midpoint]) # 找到左車道線的基點
-    rightx_base = np.argmax(histogram[midpoint:]) + midpoint # 找到右車道線的基點
+    # 計算二值圖像下半部分的直方圖
+    histogram = np.sum(binary_warped[binary_warped.shape[0] // 2:, :], axis=0)
+    
+    # 找到直方圖左半部分和右半部分的峰值
+    midpoint = np.int32(histogram.shape[0] // 2)
+    leftx_base = np.argmax(histogram[:midpoint])
+    rightx_base = np.argmax(histogram[midpoint:]) + midpoint
 
-    nwindows = 20 # 設定滑動窗口數量
-    window_height = img_w.shape[0] // nwindows # 計算每個窗口的高度
-    nonzero = img_w.nonzero() # 獲取非零像素的位置
-    nonzeroy = np.array(nonzero[0]) # 非零像素的y坐標
-    nonzerox = np.array(nonzero[1]) # 非零像素的x坐標
-    leftx_current = leftx_base + 100 # 左車道線當前x坐標
-    rightx_current = rightx_base # 右車道線當前x坐標
-    margin = 100 # 設定窗口的寬度
-    minpix = 50 # 設定最小像素數
-    leftLaneInds = [] # 儲存左車道線像素索引
-    ReftLaneInds = [] # 儲存右車道線像素索引
+    # 設定滑動窗口的參數
+    n_wins = 20
+    win_height = binary_warped.shape[0] // n_wins
+    nonzero = binary_warped.nonzero()
+    nonzeroy = np.array(nonzero[0])
+    nonzerox = np.array(nonzero[1])
+    margin = 100
+    minpix = 50
 
-    for window in range(nwindows):
-        win_y_low = img_w.shape[0] - (window + 1) * window_height # 計算窗口的y坐標下界
-        win_y_high = img_w.shape[0] - window * window_height # 計算窗口的y坐標上界
-        win_xleft_low = leftx_current - margin # 計算左窗口的x坐標下界
-        win_xleft_high = leftx_current + margin # 計算左窗口的x坐標上界
-        win_xright_low = rightx_current - margin # 計算右窗口的x坐標下界
-        win_xright_high = rightx_current + margin # 計算右窗口的x坐標上界
-        # cv2.rectangle(out_img, (win_xleft_low, win_y_low), (win_xleft_high, win_y_high), (0, 255, 0), 2) # 繪製左窗口
-        # cv2.rectangle(out_img, (win_xright_low, win_y_low), (win_xright_high, win_y_high), (0, 255, 0), 2) # 繪製右窗口
-        good_left_inds = ((nonzeroy >= win_y_low) & (nonzeroy < win_y_high) & (nonzerox >= win_xleft_low) & (nonzerox < win_xleft_high)).nonzero()[0] # 找到左窗口內的像素
-        good_right_inds = ((nonzeroy >= win_y_low) & (nonzeroy < win_y_high) & (nonzerox >= win_xright_low) & (nonzerox < win_xright_high)).nonzero()[0] # 找到右窗口內的像素
-        leftLaneInds.append(good_left_inds) # 添加左車道線像素索引
-        ReftLaneInds.append(good_right_inds) # 添加右車道線像素索引
+    # 初始化當前位置，這些位置會在每個窗口中更新
+    leftx_current = leftx_base
+    rightx_current = rightx_base
+
+    # 創建空列表來接收左車道線和右車道線的像素索引
+    left_lane_inds = []
+    right_lane_inds = []
+
+    # 一個接一個地步進窗口
+    for win in range(n_wins):
+        win_y_low = binary_warped.shape[0] - (win + 1) * win_height
+        win_y_high = binary_warped.shape[0] - win * win_height
+        win_xleft_low = leftx_current - margin
+        win_xright_low = rightx_current - margin
+        win_xleft_high = leftx_current + margin
+        win_xright_high = rightx_current + margin
+
+        # 在可視化圖像上繪製窗口
+        cv2.rectangle(OutImg, (win_xleft_low, win_y_low), (win_xleft_high, win_y_high), (0, 255, 0), 2)
+        cv2.rectangle(OutImg, (win_xright_low, win_y_low), (win_xright_high, win_y_high), (0, 255, 0), 2)
+
+        # 識別窗口內的非零像素
+        good_left_inds = ((nonzeroy >= win_y_low) & (nonzeroy < win_y_high) & 
+                          (nonzerox >= win_xleft_low) & (nonzerox < win_xleft_high)).nonzero()[0]
+        good_right_inds = ((nonzeroy >= win_y_low) & (nonzeroy < win_y_high) & 
+                           (nonzerox >= win_xright_low) & (nonzerox < win_xright_high)).nonzero()[0]
+
+        # 將這些索引添加到列表中
+        left_lane_inds.append(good_left_inds)
+        right_lane_inds.append(good_right_inds)
+
+        # 如果找到的像素數超過minpix，則在它們的平均位置重新定位下一個窗口
         if len(good_left_inds) > minpix:
-            leftx_current = np.int32(np.mean(nonzerox[good_left_inds])) # 更新左車道線當前x坐標
+            leftx_current = np.int32(np.mean(nonzerox[good_left_inds]))
         if len(good_right_inds) > minpix:
-            rightx_current = np.int32(np.mean(nonzerox[good_right_inds])) # 更新右車道線當前x坐標
-    # cv2.imshow("slide", out_img)
-    leftLaneInds = np.concatenate(leftLaneInds) # 合併左車道線像素索引
-    ReftLaneInds = np.concatenate(ReftLaneInds) # 合併右車道線像素索引
-    leftx = nonzerox[leftLaneInds] # 獲取左車道線x坐標
-    lefty = nonzeroy[leftLaneInds] # 獲取左車道線y坐標
-    rightx = nonzerox[ReftLaneInds] # 獲取右車道線x坐標
-    righty = nonzeroy[ReftLaneInds] # 獲取右車道線y坐標
-    left_fit = np.polyfit(lefty, leftx, 2) if leftx.size > 0 and lefty.size > 0 else prev_left_fit # 擬合左車道線二次多項式
-    right_fit = np.polyfit(righty, rightx, 2) if rightx.size > 0 and righty.size > 0 else prev_right_fit # 擬合右車道線二次多項式
+            rightx_current = np.int32(np.mean(nonzerox[good_right_inds]))
 
+    # 合併索引數組
+    left_lane_inds = np.concatenate(left_lane_inds)
+    right_lane_inds = np.concatenate(right_lane_inds)
+
+    # 提取左線和右線的像素位置
+    leftx = nonzerox[left_lane_inds]
+    lefty = nonzeroy[left_lane_inds]
+    rightx = nonzerox[right_lane_inds]
+    righty = nonzeroy[right_lane_inds]
+
+    # 擬合每條線的二次多項式
     if leftx.size > 0 and lefty.size > 0:
+        left_fit = np.polyfit(lefty, leftx, 2)
         prev_left_fit = left_fit
-    
+    else:
+        left_fit = prev_left_fit
+
     if rightx.size > 0 and righty.size > 0:
+        right_fit = np.polyfit(righty, rightx, 2)
         prev_right_fit = right_fit
-    
-    return left_fit, right_fit # 返回擬合結果
+    else:
+        right_fit = prev_right_fit
+
+    return left_fit, right_fit
 
 # 根據車道線擬合結果再次擬合
-def fit_from_lines(left_fit, right_fit, img_w):
-    nonzero = img_w.nonzero() # 獲取非零像素的位置
-    nonzeroy = np.array(nonzero[0]) # 非零像素的y坐標
-    nonzerox = np.array(nonzero[1]) # 非零像素的x坐標
-    margin = 200 # 設定窗口的寬度
-    leftLaneInds = ((nonzerox > (left_fit[0] * (nonzeroy ** 2) + left_fit[1] * nonzeroy + left_fit[2] - margin)) & (nonzerox < (left_fit[0] * (nonzeroy ** 2) + left_fit[1] * nonzeroy + left_fit[2] + margin))) # 找到左車道線像素
-    ReftLaneInds = ((nonzerox > (right_fit[0] * (nonzeroy ** 2) + right_fit[1] * nonzeroy + right_fit[2] - margin)) & (nonzerox < (right_fit[0] * (nonzeroy ** 2) + right_fit[1] * nonzeroy + right_fit[2] + margin))) # 找到右車道線像素
-    leftx = nonzerox[leftLaneInds] # 獲取左車道線x坐標
-    lefty = nonzeroy[leftLaneInds] # 獲取左車道線y坐標
-    rightx = nonzerox[ReftLaneInds] # 獲取右車道線x坐標
-    righty = nonzeroy[ReftLaneInds] # 獲取右車道線y坐標
-    if leftx.any() == False or lefty.any() == False:
-        return left_fit, right_fit
-    else:
-        left_fit = np.polyfit(lefty, leftx, 2) # 再次擬合左車道線二次多項式
-        right_fit = np.polyfit(righty, rightx, 2) # 再次擬合右車道線二次多項式
+def FitFromLines(left_fit, right_fit, binary_warped):
+    nonzero = binary_warped.nonzero()  # 獲取非零像素的位置
+    nonzeroy = np.array(nonzero[0])  # 非零像素的y坐標
+    nonzerox = np.array(nonzero[1])  # 非零像素的x坐標
+    margin = 200  # 設定窗口的寬度
+    
+    # 計算多項式值
+    left_fit_x = left_fit[0] * (nonzeroy ** 2) + left_fit[1] * nonzeroy + left_fit[2]
+    right_fit_x = right_fit[0] * (nonzeroy ** 2) + right_fit[1] * nonzeroy + right_fit[2]
+
+    # 找到左車道線像素
+    left_lane_inds = ((nonzerox > (left_fit_x - margin)) & 
+                      (nonzerox < (left_fit_x + margin)))
+    
+    # 找到右車道線像素
+    right_lane_inds = ((nonzerox > (right_fit_x - margin)) & 
+                       (nonzerox < (right_fit_x + margin)))
+    
+    # 獲取左車道線和右車道線的x, y坐標
+    leftx = nonzerox[left_lane_inds]
+    lefty = nonzeroy[left_lane_inds]
+    rightx = nonzerox[right_lane_inds]
+    righty = nonzeroy[right_lane_inds]
+
+    # 只有當左或右車道線有足夠的點時，才擬合二次多項式
+    if leftx.size > 0 and lefty.size > 0:
+        left_fit = np.polyfit(lefty, leftx, 2)
+    if rightx.size > 0 and righty.size > 0:
+        right_fit = np.polyfit(righty, rightx, 2)
+    
     return left_fit, right_fit
-     # 返回新的擬合結果
 
 # 繪製車道線和區域
 def DrawLines(img, img_w, left_fit, right_fit, perspective):
-    warp_zero = np.zeros_like(img_w).astype(np.uint8) # 創建黑色圖像
-    color_warp = np.dstack((warp_zero, warp_zero, warp_zero)) # 創建彩色圖像
+    # 創建黑色圖像和彩色圖像
+    warp_zero = np.zeros_like(img_w).astype(np.uint8)
+    color_warp = np.dstack((warp_zero, warp_zero, warp_zero))
 
-    ploty = np.linspace(0, img.shape[0] - 1, img.shape[0]) # 獲取y坐標
-    left_fitx = left_fit[0] * ploty ** 2 + left_fit[1] * ploty + left_fit[2] # 計算左車道線x坐標
-    right_fitx = right_fit[0] * ploty ** 2 + right_fit[1] * ploty + right_fit[2] # 計算右車道線x坐標
+    # 獲取y坐標
+    ploty = np.linspace(0, img.shape[0] - 1, img.shape[0])
+    # 計算左車道線和右車道線x坐標
+    left_fitx = left_fit[0] * ploty ** 2 + left_fit[1] * ploty + left_fit[2]
+    right_fitx = right_fit[0] * ploty ** 2 + right_fit[1] * ploty + right_fit[2]
 
-    pts_left = np.array([np.transpose(np.vstack([left_fitx, ploty]))]) # 創建左車道線點
-    pts_right = np.array([np.flipud(np.transpose(np.vstack([right_fitx, ploty])))]); # 創建右車道線點
-    pts = np.hstack((pts_left, pts_right)) # 合併車道線點
+    # 創建左車道線和右車道線點
+    pts_left = np.array([np.transpose(np.vstack([left_fitx, ploty]))])
+    pts_right = np.array([np.flipud(np.transpose(np.vstack([right_fitx, ploty])))])
 
-    cv2.fillPoly(color_warp, np.int32([pts]), (0, 255, 0)) # 填充車道區域
+    # 合併車道線點並填充車道區域
+    pts = np.hstack((pts_left, pts_right))
+    cv2.fillPoly(color_warp, np.int32([pts]), (0, 255, 0))
 
-    newwarp = warp(color_warp, perspective[1], perspective[0]) # 透視變換車道區域
-    result = cv2.addWeighted(img, 1, newwarp, 0.2, 0) # 合併原圖和車道區域
+    # 透視變換車道區域並合併到原圖
+    newwarp = warp(color_warp, perspective[1], perspective[0])
+    result = cv2.addWeighted(img, 1, newwarp, 0.2, 0)
 
-    color_warp_lines = np.dstack((warp_zero, warp_zero, warp_zero)) # 創建黑色圖像
-    cv2.polylines(color_warp_lines, np.int32([pts_right]), isClosed=False, color=(255, 255, 255), thickness=25) # 繪製右車道線
-    cv2.polylines(color_warp_lines, np.int32([pts_left]), isClosed=False, color=(0, 255, 255), thickness=25) # 繪製左車道線
-    newwarp_lines = warp(color_warp_lines, perspective[1], perspective[0]) # 透視變換車道線
-    result = cv2.addWeighted(result, 1, newwarp_lines, 0.8, 0) # 合併原圖和車道線
-   
-    return result, newwarp_lines # 返回結果圖像和變換後的車道線圖像
+    # 創建黑色圖像，繪製左右車道線並透視變換
+    color_warp_lines = np.dstack((warp_zero, warp_zero, warp_zero))
+    cv2.polylines(color_warp_lines, np.int32([pts_right]), isClosed=False, color=(255, 255, 255), thickness=25)
+    cv2.polylines(color_warp_lines, np.int32([pts_left]), isClosed=False, color=(0, 255, 255), thickness=25)
+    newwarp_lines = warp(color_warp_lines, perspective[1], perspective[0])
+
+    # 合併變換後的車道線到結果圖像
+    result = cv2.addWeighted(result, 1, newwarp_lines, 0.8, 0)
+
+    return result, newwarp_lines
 
 cap = cv2.VideoCapture("python_test/Lane-Lines-and-Servo-motor-control-master/testVideo.mp4") # 讀取視頻文件
 fps = int(cap.get(cv2.CAP_PROP_FPS)) # 獲取視頻的幀率
@@ -193,18 +276,18 @@ while True: # 開始視頻處理循環
         print("Getting no frames") # 打印提示信息
         break # 跳出循環
 
+    img = cv2.resize(img, (1280, 720)) # 調整圖像大小
     src = [(200, 720), (595, 450), (685, 450), (1100, 720)] # 設定源點
     dst = [(320, 720), (320, 0), (960, 0), (960, 720)] # 設定目標點
     H = np.float32([src]) # 將源點轉換為浮點數型別
     W = np.float32([dst]) # 將目標點轉換為浮點數型別
-    img = cv2.resize(img, (1280, 720)) # 調整圖像大小
-    result = ColoChange(img) # 進行顏色處理
+    result = ProcessImage(img) # 進行顏色處理
     rewslt = RegionOfInterest(result)
     img_w = warp(result, src, dst) # 進行透視變換
     # cv2.imshow("warp", img_w)
-    out_img = SlidingWindown(img_w) # 使用滑動窗口方法
-    left_fit, right_fit = out_img[0], out_img[1] # 獲取車道線擬合結果
-    new_outimg = fit_from_lines(left_fit, right_fit, img_w) # 再次擬合車道線
+    OutImg = Slidingwin(img_w) # 使用滑動窗口方法
+    left_fit, right_fit = OutImg[0], OutImg[1] # 獲取車道線擬合結果
+    new_outimg = FitFromLines(left_fit, right_fit, img_w) # 再次擬合車道線
     left_fit, right_fit = new_outimg[0], new_outimg[1] # 更新車道線擬合結果
 
     if len(mov_avg_left) < MOV_AVG_LENGTH: # 如果移動平均數組長度小於設置值
