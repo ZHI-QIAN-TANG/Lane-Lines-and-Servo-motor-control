@@ -83,6 +83,7 @@ def warp(img, src_points, dst_points, size=None):
     return centered_warped
 prev_left_fit = []
 prev_right_fit = []
+
 # 定義滑動窗口法進行車道線檢測
 def Slidingwin(binary_warped):
     global prev_left_fit
@@ -251,7 +252,7 @@ while True: # 開始視頻處理循環
     if not ret: # 如果沒有讀取到幀
         print("Getting no frames") # 打印提示信息
         break # 跳出循環
-    
+
     img = cv2.resize(img, (1280, 720)) # 調整圖像大小
     src = [(200, 720), (595, 450), (685, 450), (1100, 720)] # 設定源點
     dst = [(320, 720), (320, 0), (960, 0), (960, 720)] # 設定目標點
