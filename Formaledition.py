@@ -68,19 +68,22 @@ def warp(img, src_points, dst_points, size=None):
     # 獲取圖像尺寸
     img_size = (img.shape[1], img.shape[0]) if size is None else size
     
-    # 計算透視變換矩陣
+    # 計算投影轉換矩陣
     M = cv2.getPerspectiveTransform(src, dst)
     
-    # 進行透視變換
-    warped = cv2.warpPerspective(img, M, img_size, flags=cv2.INTER_LINEAR)
     
-    # 創建一個黑色圖像並將透視變換後的圖像置於中央
+    # 進行投影轉換
+    warped = cv2.warpPerspective(img, M, img_size, flags=cv2.INTER_LINEAR)
+    cv2.imshow('Masked Image', warped)
+
+    
+    # 創建一個黑色圖像並將投影轉換後的圖像置於中央
     centered_warped = np.zeros_like(img)
     x_offset = (centered_warped.shape[1] - img_size[0]) // 2
     y_offset = (centered_warped.shape[0] - img_size[1]) // 2
     centered_warped[y_offset:y_offset+img_size[1], x_offset:x_offset+img_size[0]] = warped
-    
     return centered_warped
+
 prev_left_fit = []
 prev_right_fit = []
 
@@ -176,7 +179,7 @@ def fitFromLines(left_fit, right_fit, binary_warped):
     nonzero = binary_warped.nonzero()  # 獲取非零像素的位置
     nonzeroy = np.array(nonzero[0])  # 非零像素的y坐標
     nonzerox = np.array(nonzero[1])  # 非零像素的x坐標
-    margin = 200  # 設定窗口的寬度
+    margin = 20  # 設定窗口的寬度
     
     # 計算多項式值
     left_fit_x = left_fit[0] * (nonzeroy ** 2) + left_fit[1] * nonzeroy + left_fit[2]
@@ -224,11 +227,11 @@ def DrawLines(img, img_w, left_fit, right_fit, perspective):
     pts = np.hstack((pts_left, pts_right))
     cv2.fillPoly(color_warp, np.int32([pts]), (0, 255, 0))
 
-    # 透視變換車道區域並合併到原圖
+    # 投影轉換車道區域並合併到原圖
     newwarp = warp(color_warp, perspective[1], perspective[0])
     result = cv2.addWeighted(img, 1, newwarp, 0.2, 0)
 
-    # 創建黑色圖像，繪製左右車道線並透視變換
+    # 創建黑色圖像，繪製左右車道線並投影轉換
     color_warp_lines = np.dstack((warp_zero, warp_zero, warp_zero))
     cv2.polylines(color_warp_lines, np.int32([pts_right]), isClosed=False, color=(255, 255, 255), thickness=25)
     cv2.polylines(color_warp_lines, np.int32([pts_left]), isClosed=False, color=(0, 255, 255), thickness=25)
@@ -260,7 +263,7 @@ while True: # 開始視頻處理循環
     W = np.float32([dst]) # 將目標點轉換為浮點數型別
     result = ProcessImage(img) # 進行顏色處理
     rewslt = RegionOfInterest(result)
-    img_w = warp(result, src, dst) # 進行透視變換
+    img_w = warp(result, src, dst) # 進行投影轉換
     cv2.imshow("warp", img_w)
     out_img = Slidingwin(img_w) # 使用滑動窗口方法
     left_fit, right_fit = out_img[0], out_img[1] # 獲取車道線擬合結果
