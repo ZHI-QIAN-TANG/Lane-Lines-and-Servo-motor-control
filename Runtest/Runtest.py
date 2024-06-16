@@ -1,12 +1,46 @@
-#用於跑電腦模擬
+#用於跑開發板
 import numpy as np # 導入NumPy庫
 import cv2 # 導入OpenCV庫
 import time # 導入時間庫
-from scipy.stats import linregress
-import math
+import RPi.GPIO as GPIO
+
 
 out_examples = 0 # 初始化變量out_examples為0
 MOV_AVG_LENGTH = 5 # 設定移動平均的長度為5
+
+
+
+# 設定伺服馬達的引腳
+pin_servo = 25
+
+# 設定GPIO模式
+GPIO.setmode(GPIO.BCM)
+
+# 設定伺服馬達的引腳為輸出模式
+GPIO.setup(pin_servo, GPIO.OUT)
+# 設定伺服馬達的轉動頻率
+pwm_servo = GPIO.PWM(pin_servo, 50)  # 50Hz frequency
+# 啟動PWM
+pwm_servo.start(0)
+
+# 關閉GPIO
+def destroy():
+    pwm_servo.stop()
+    GPIO.cleanup()
+
+# 將轉動角度換算成佔空比
+def convert(x, i_m, i_M, o_m, o_M):
+    return max(min(o_M, (x - i_m) * (o_M - o_m) // (i_M - i_m) + o_m), o_m)
+
+# 設定伺服馬達的轉動角度
+def set_direction(angle):
+    # 使用 convert 函數將角度轉換成佔空比
+    duty = convert(angle, 0, 180, 200, 1200) / 100.0  # 將範圍縮放到2-12之間
+    pwm_servo.ChangeDutyCycle(duty)
+    # 消除抖動
+    time.sleep(0.1)
+    pwm_servo.ChangeDutyCycle(0)
+    print("角度=", angle, "-> duty=", duty)
 
 # 定義顏色處理函數
 def ProcessImage(inpImage):
@@ -38,28 +72,15 @@ def ProcessImage(inpImage):
     cv2.imshow('Edges', dilate)
     return dilate
 
-
-def RegionOfInterest(img, vertices=None):
-    mask = np.zeros_like(img)  # 創建與輸入圖像相同大小的黑色遮罩
-
-    if vertices is None:
-        imshape = img.shape
-        # 預設多邊形頂點
-        vertices = np.array([[(0, imshape[0]), (390, 440), (880, 440), (imshape[1], imshape[0])]], dtype=np.int32)
-
-    cv2.fillPoly(mask, vertices, 255)  # 填充多邊形
-    masked_image = cv2.bitwise_and(img, mask)  # 應用遮罩
-
-    # 顯示遮罩後的圖像（在實際使用時可以選擇移除）
-    cv2.imshow('Masked Image', masked_image)
-
-    return masked_image  # 返回遮罩後的圖像
-
-# 示例使用
-# inpImage = cv2.imread('path_to_your_image.jpg')
-# vertices = np.array([[(0, inpImage.shape[0]), (390, 440), (880, 440), (inpImage.shape[1], inpImage.shape[0])]], dtype=np.int32)
-# roi_image = RegionOfInterest(inpImage, vertices)
-
+# 定義感興趣區域的遮罩函數
+def RegionOfInterest(img):
+    mask = np.zeros_like(img) # 創建與輸入圖像相同大小的黑色遮罩
+    imshape = img.shape # 獲取圖像形狀
+    vertices = np.array([[(0, imshape[0]), (390, 440), (880, 440), (imshape[1]-20, imshape[0])]], dtype=np.int32) # 定義多邊形頂點
+    cv2.fillPoly(mask, vertices, 255) # 填充多邊形
+    masked_image = cv2.bitwise_and(img, mask) # 應用遮罩
+    # cv2.imshow('a',mask)
+    return masked_image # 返回遮罩後的圖像
 
 def warp(img, src_points, dst_points, size=None):
     # 檢查並轉換源點和目標點為浮點數類型
@@ -69,25 +90,22 @@ def warp(img, src_points, dst_points, size=None):
     # 獲取圖像尺寸
     img_size = (img.shape[1], img.shape[0]) if size is None else size
     
-    # 計算投影轉換矩陣
+    # 計算透視變換矩陣
     M = cv2.getPerspectiveTransform(src, dst)
     
-    
-    # 進行投影轉換
+    # 進行透視變換
     warped = cv2.warpPerspective(img, M, img_size, flags=cv2.INTER_LINEAR)
-    cv2.imshow('Masked Image', warped)
-
     
-    # 創建一個黑色圖像並將投影轉換後的圖像置於中央
+    # 創建一個黑色圖像並將透視變換後的圖像置於中央
     centered_warped = np.zeros_like(img)
     x_offset = (centered_warped.shape[1] - img_size[0]) // 2
     y_offset = (centered_warped.shape[0] - img_size[1]) // 2
     centered_warped[y_offset:y_offset+img_size[1], x_offset:x_offset+img_size[0]] = warped
+    
     return centered_warped
 
 prev_left_fit = []
 prev_right_fit = []
-
 # 定義滑動窗口法進行車道線檢測
 def Slidingwin(binary_warped):
     global prev_left_fit
@@ -176,11 +194,11 @@ def Slidingwin(binary_warped):
     return left_fit, right_fit
 
 # 根據車道線擬合結果再次擬合
-def fitFromLines(left_fit, right_fit, binary_warped):
+def FitFromLines(left_fit, right_fit, binary_warped):
     nonzero = binary_warped.nonzero()  # 獲取非零像素的位置
     nonzeroy = np.array(nonzero[0])  # 非零像素的y坐標
     nonzerox = np.array(nonzero[1])  # 非零像素的x坐標
-    margin = 20  # 設定窗口的寬度
+    margin = 200  # 設定窗口的寬度
     
     # 計算多項式值
     left_fit_x = left_fit[0] * (nonzeroy ** 2) + left_fit[1] * nonzeroy + left_fit[2]
@@ -228,11 +246,11 @@ def DrawLines(img, img_w, left_fit, right_fit, perspective):
     pts = np.hstack((pts_left, pts_right))
     cv2.fillPoly(color_warp, np.int32([pts]), (0, 255, 0))
 
-    # 投影轉換車道區域並合併到原圖
+    # 透視變換車道區域並合併到原圖
     newwarp = warp(color_warp, perspective[1], perspective[0])
     result = cv2.addWeighted(img, 1, newwarp, 0.2, 0)
 
-    # 創建黑色圖像，繪製左右車道線並投影轉換
+    # 創建黑色圖像，繪製左右車道線並透視變換
     color_warp_lines = np.dstack((warp_zero, warp_zero, warp_zero))
     cv2.polylines(color_warp_lines, np.int32([pts_right]), isClosed=False, color=(255, 255, 255), thickness=25)
     cv2.polylines(color_warp_lines, np.int32([pts_left]), isClosed=False, color=(0, 255, 255), thickness=25)
@@ -243,10 +261,11 @@ def DrawLines(img, img_w, left_fit, right_fit, perspective):
 
     return result, newwarp_lines
 
-cap = cv2.VideoCapture('testVideo.mp4') # 讀取視頻文件
+cap = cv2.VideoCapture("python_test/Lane-Lines-and-Servo-motor-control-master/testVideo.mp4") # 讀取視頻文件
 fps = int(cap.get(cv2.CAP_PROP_FPS)) # 獲取視頻的幀率
 width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) # 獲取視頻的寬度
 height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) # 獲取視頻的高度
+# out = cv2.VideoWriter('output.avi', fourcc, fps, (width, height)) # 創建輸出視頻文件
 
 mov_avg_left = np.empty((0, 3)) # 初始化左車道線移動平均數組
 mov_avg_right = np.empty((0, 3)) # 初始化右車道線移動平均數組
@@ -264,11 +283,11 @@ while True: # 開始視頻處理循環
     W = np.float32([dst]) # 將目標點轉換為浮點數型別
     result = ProcessImage(img) # 進行顏色處理
     rewslt = RegionOfInterest(result)
-    img_w = warp(result, src, dst) # 進行投影轉換
-    cv2.imshow("warp", img_w)
-    out_img = Slidingwin(img_w) # 使用滑動窗口方法
-    left_fit, right_fit = out_img[0], out_img[1] # 獲取車道線擬合結果
-    new_outimg = fitFromLines(left_fit, right_fit, img_w) # 再次擬合車道線
+    img_w = warp(result, src, dst) # 進行透視變換
+    # cv2.imshow("warp", img_w)
+    OutImg = Slidingwin(img_w) # 使用滑動窗口方法
+    left_fit, right_fit = OutImg[0], OutImg[1] # 獲取車道線擬合結果
+    new_outimg = FitFromLines(left_fit, right_fit, img_w) # 再次擬合車道線
     left_fit, right_fit = new_outimg[0], new_outimg[1] # 更新車道線擬合結果
 
     if len(mov_avg_left) < MOV_AVG_LENGTH: # 如果移動平均數組長度小於設置值
@@ -295,20 +314,20 @@ while True: # 開始視頻處理循環
     try:
         if right_slope > 0:
             right_slope += 10
-        if -90 <= left_slope <= 90 and -90 <= right_slope <= 90:
-            angle = (left_slope + right_slope) / 2
-            angle_in_degrees = -math.atan(angle)
-            print('angle_in_degrees =', angle_in_degrees)
     except ZeroDivisionError:
-        angle_in_degrees = float('inf') # 如果出現除零錯誤，設為無窮大
+        right_slope = float('inf') # 如果出現除零錯誤，設為無窮大
 
     font = cv2.FONT_HERSHEY_SIMPLEX # 設定字體
-    if -5 <= angle_in_degrees <= 5:
-        curve_direction = "Forward" 
-    elif  -5 > angle_in_degrees:
-        curve_direction = "Turn Left" 
-    elif angle_in_degrees > 5:
-        curve_direction = "Turn Right" 
+    if -40 < right_slope < 40:
+        if -10 < right_slope < 10:
+            curve_direction = "Forward" 
+            set_direction(int(-right_slope) + 90)
+        elif right_slope > 0:
+            curve_direction = "Turn Left" 
+            set_direction(int(-right_slope) + 90)
+        elif right_slope < 0:
+            curve_direction = "Turn Right" 
+            set_direction(int(-right_slope) + 90)
 
     cv2.putText(result, curve_direction, (50, 50), font, 1, (0, 255, 0), 2, cv2.LINE_AA) # 在圖像上顯示轉彎方向
     # out.write(result) # 寫入輸出視頻

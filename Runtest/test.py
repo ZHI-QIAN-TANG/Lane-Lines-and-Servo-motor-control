@@ -3,7 +3,6 @@ import numpy as np # 導入NumPy庫
 import cv2 # 導入OpenCV庫
 import time # 導入時間庫
 from scipy.stats import linregress
-import math
 
 out_examples = 0 # 初始化變量out_examples為0
 MOV_AVG_LENGTH = 5 # 設定移動平均的長度為5
@@ -295,19 +294,18 @@ while True: # 開始視頻處理循環
     try:
         if right_slope > 0:
             right_slope += 10
-        if -90 <= left_slope <= 90 and -90 <= right_slope <= 90:
-            angle = (left_slope + right_slope) / 2
-            angle_in_degrees = -math.atan(angle)
-            print('angle_in_degrees =', angle_in_degrees)
+        # print('left_slope ',-left_slope)
+        # print('right_slope ',-right_slope)
+        print('angle ',-right_slope)
     except ZeroDivisionError:
-        angle_in_degrees = float('inf') # 如果出現除零錯誤，設為無窮大
+        right_slope = float('inf') # 如果出現除零錯誤，設為無窮大
 
     font = cv2.FONT_HERSHEY_SIMPLEX # 設定字體
-    if -5 <= angle_in_degrees <= 5:
+    if -10 < right_slope < 10:
         curve_direction = "Forward" 
-    elif  -5 > angle_in_degrees:
+    elif -right_slope < 0:
         curve_direction = "Turn Left" 
-    elif angle_in_degrees > 5:
+    elif -right_slope > 0:
         curve_direction = "Turn Right" 
 
     cv2.putText(result, curve_direction, (50, 50), font, 1, (0, 255, 0), 2, cv2.LINE_AA) # 在圖像上顯示轉彎方向

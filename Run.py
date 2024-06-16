@@ -3,7 +3,7 @@ import numpy as np # 導入NumPy庫
 import cv2 # 導入OpenCV庫
 import time # 導入時間庫
 import RPi.GPIO as GPIO
-
+import math
 
 out_examples = 0 # 初始化變量out_examples為0
 MOV_AVG_LENGTH = 5 # 設定移動平均的長度為5
@@ -314,22 +314,24 @@ while True: # 開始視頻處理循環
     try:
         if right_slope > 0:
             right_slope += 10
-        # print('left_slope ',left_slope)
-        # print('angle ',int(right_slope))
+        if -90 <= left_slope <= 90 and -90 <= right_slope <= 90:
+            angle = (left_slope + right_slope) / 2
+            angle_in_degrees = -math.atan(angle)
+            print('angle_in_degrees =', angle_in_degrees)
     except ZeroDivisionError:
         right_slope = float('inf') # 如果出現除零錯誤，設為無窮大
 
     font = cv2.FONT_HERSHEY_SIMPLEX # 設定字體
-    if -40 < right_slope < 40:
-        if -10 < right_slope < 10:
+    if -40 < angle_in_degrees < 40:
+        if -5 <= angle_in_degrees <= 5:
             curve_direction = "Forward" 
-            set_direction(int(-right_slope) + 90)
-        elif right_slope > 0:
+            set_direction(int(angle_in_degrees) + 90)
+        elif  -5 > angle_in_degrees:
             curve_direction = "Turn Left" 
-            set_direction(int(-right_slope) + 90)
-        elif right_slope < 0:
+            set_direction(int(angle_in_degrees) + 90)
+        elif angle_in_degrees > 5:
             curve_direction = "Turn Right" 
-            set_direction(int(-right_slope) + 90)
+            set_direction(int(angle_in_degrees) + 90)
 
     cv2.putText(result, curve_direction, (50, 50), font, 1, (0, 255, 0), 2, cv2.LINE_AA) # 在圖像上顯示轉彎方向
     # out.write(result) # 寫入輸出視頻
